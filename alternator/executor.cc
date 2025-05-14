@@ -324,7 +324,7 @@ static std::tuple<bool, std::string_view, std::string_view> try_get_internal_tab
 // a table or a materialized view from which to read, based on the TableName
 // and optional IndexName in the request. Only requests like Query and Scan
 // which allow IndexName should use this function.
-enum class table_or_view_type { base, lsi, gsi };
+enum class table_or_view_type { base, lsi, gsi, openSearch };
 static std::pair<schema_ptr, table_or_view_type>
 get_table_or_view(service::storage_proxy& proxy, const rjson::value& request) {
     table_or_view_type type = table_or_view_type::base;
@@ -348,21 +348,23 @@ get_table_or_view(service::storage_proxy& proxy, const rjson::value& request) {
     const rjson::value* index_name = rjson::find(request, "IndexName");
     std::string orig_table_name;
     if (index_name) {
-        if (index_name->IsString()) {
+        if (!index_name->IsString()) {
+            throw api_error::validation(
+                                fmt::format("Non-string IndexName '{}'", rjson::to_string_view(*index_name)));
+        }
+        if (rjson::to_string_view(*index_name) == "OpenSearch") {
+            type = table_or_view_type::openSearch;
+        } else {
             orig_table_name = std::move(table_name);
             table_name = view_name(orig_table_name, rjson::to_string_view(*index_name));
             type = table_or_view_type::gsi;
-        } else {
-            throw api_error::validation(
-                    fmt::format("Non-string IndexName '{}'", rjson::to_string_view(*index_name)));
-        }
-        // If no tables for global indexes were found, the index may be local
-        if (!proxy.data_dictionary().has_schema(keyspace_name, table_name)) {
-            type = table_or_view_type::lsi;
-            table_name = lsi_name(orig_table_name, rjson::to_string_view(*index_name));
+            // If no tables for global indexes were found, the index may be local
+            if (!proxy.data_dictionary().has_schema(keyspace_name, table_name)) {
+                type = table_or_view_type::lsi;
+                table_name = lsi_name(orig_table_name, rjson::to_string_view(*index_name));
+            }
         }
     }
-
     try {
         return { proxy.data_dictionary().find_schema(keyspace_name, table_name), type };
     } catch(data_dictionary::no_such_column_family&) {
