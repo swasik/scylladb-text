@@ -5264,6 +5264,66 @@ calculate_bounds_condition_expression(schema_ptr schema,
     return {std::move(partition_ranges), std::move(ck_bounds)};
 }
 
+// FIXME: right now we just return a list of partition keys - it assumes
+// the table has no partition keys :-)
+static vector<std::string> send_query_to_opensearch(std::string query, int limit) {
+#if 0
+    [[nodiscard]] auto vector_store::ann(keyspace_name_t keyspace, index_name_t name, schema_ptr schema, embedding_t embedding, limit_t limit) const
+        -> future<std::optional<std::vector<primary_key_t>>> {
+    auto req = http::request::make("POST", _host, format("/api/v1/indexes/{}/{}/ann", keyspace, name));
+    req.write_body("json", [limit, embedding = std::move(embedding)](output_stream<char> out) -> future<> {
+        std::exception_ptr ex;
+        try {
+            co_await out.write(R"({"embedding":[)");
+            auto first = true;
+            for (auto value : embedding) {
+                if (!first) {
+                    co_await out.write(",");
+                } else {
+                    first = false;
+                }
+                co_await out.write(format("{}", value));
+            }
+            co_await out.write(format(R"(],"limit":{}}})", limit));
+            co_await out.flush();
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        co_await out.close();
+        if (ex) {
+            co_await coroutine::return_exception_ptr(std::move(ex));
+        }
+    });
+
+    auto resp_status = make_lw_shared(http::reply::status_type::ok);
+    auto resp_content = make_lw_shared<std::vector<temporary_buffer<char>>>();
+    co_await _client->make_request(std::move(req), [resp_status, resp_content](http::reply const& reply, input_stream<char> body) -> future<> {
+        *resp_status = reply._status;
+        *resp_content = co_await util::read_entire_stream(body);
+    });
+
+    vslogger.info("ppery: make_request: status {}, content {}", resp_status, resp_content);
+    auto const resp = rjson::parse(std::move(*resp_content));
+    vslogger.info("ppery: resp: {}", resp);
+    auto const& primary_keys = resp["primary_keys"];
+    vslogger.info("ppery: primary_keys: {}", primary_keys);
+    // TODO: fix error checking
+    auto const distances = resp["distances"].GetArray();
+    vslogger.info("ppery: distances: {}", distances);
+    auto size = distances.Size();
+    vslogger.info("ppery: size: {}", size);
+    auto keys = std::vector<primary_key_t>{};
+    for (auto idx = 0U; idx < size; ++idx) {
+        vslogger.info("ppery: loop: {}", idx);
+        auto pk = pk_from_json(primary_keys, idx, schema);
+        auto ck = ck_from_json(primary_keys, idx, schema);
+        keys.push_back(primary_key_t{dht::decorate_key(*schema, std::move(pk)), ck});
+    }
+    vslogger.info("ppery: keys.size: {}", keys.size());
+    co_return std::optional{keys};
+#endif
+}
+
 future<executor::request_return_type> executor::query(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     _stats.api_operations.query++;
     elogger.trace("Querying {}", request);
@@ -5275,13 +5335,13 @@ future<executor::request_return_type> executor::query(client_state& client_state
     rjson::value* exclusive_start_key = rjson::find(request, "ExclusiveStartKey");
     db::consistency_level cl = get_read_consistency(request);
     if (table_type == table_or_view_type::gsi && cl != db::consistency_level::LOCAL_ONE) {
-        return make_ready_future<request_return_type>(api_error::validation(
-                "Consistent reads are not allowed on global indexes (GSI)"));
+        co_return api_error::validation(
+                "Consistent reads are not allowed on global indexes (GSI)");
     }
     rjson::value* limit_json = rjson::find(request, "Limit");
     uint32_t limit = limit_json ? limit_json->GetUint64() : std::numeric_limits<uint32_t>::max();
     if (limit <= 0) {
-        return make_ready_future<request_return_type>(api_error::validation("Limit must be greater than 0"));
+        co_return api_error::validation("Limit must be greater than 0");
     }
 
     const bool forward = get_bool_attribute(request, "ScanIndexForward", true);
@@ -5301,6 +5361,12 @@ future<executor::request_return_type> executor::query(client_state& client_state
     const rjson::value* expression_attribute_names = rjson::find(request, "ExpressionAttributeNames");
     const rjson::value* expression_attribute_values = rjson::find(request, "ExpressionAttributeValues");
 
+    if (table_type == table_or_view_type::openSearch) {
+        co_await send_query_to_opensearch(rjson::to_string(key_condition_expression), limit);
+        co_return api_error::validation(
+                "OpenSearch not yet implemented");
+    }
+
     // exactly one of key_conditions or key_condition_expression
     auto [partition_ranges, ck_bounds] = key_conditions
                 ? calculate_bounds_conditions(schema, *key_conditions)
@@ -5316,14 +5382,14 @@ future<executor::request_return_type> executor::query(client_state& client_state
     // A query is not allowed to filter on the partition key or the sort key.
     for (const column_definition& cdef : schema->partition_key_columns()) { // just one
         if (filter.filters_on(cdef.name_as_text())) {
-            return make_ready_future<request_return_type>(api_error::validation(
-                    format("QueryFilter can only contain non-primary key attributes: Partition key attribute: {}", cdef.name_as_text())));
+            co_return api_error::validation(
+                    format("QueryFilter can only contain non-primary key attributes: Partition key attribute: {}", cdef.name_as_text()));
         }
     }
     for (const column_definition& cdef : schema->clustering_key_columns()) {
         if (filter.filters_on(cdef.name_as_text())) {
-            return make_ready_future<request_return_type>(api_error::validation(
-                    format("QueryFilter can only contain non-primary key attributes: Sort key attribute: {}", cdef.name_as_text())));
+            co_return api_error::validation(
+                    format("QueryFilter can only contain non-primary key attributes: Sort key attribute: {}", cdef.name_as_text()));
         }
         // FIXME: this "break" can avoid listing some clustering key columns
         // we added for GSIs just because they existed in the base table -
@@ -5338,7 +5404,7 @@ future<executor::request_return_type> executor::query(client_state& client_state
     verify_all_are_used(expression_attribute_values, used_attribute_values, "ExpressionAttributeValues", "Query");
     query::partition_slice::option_set opts;
     opts.set_if<query::partition_slice::option::reversed>(!forward);
-    return do_query(_proxy, schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
+    co_return co_await do_query(_proxy, schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
             std::move(filter), opts, client_state, _stats.cql_stats, std::move(trace_state), std::move(permit), _enforce_authorization);
 }
 
