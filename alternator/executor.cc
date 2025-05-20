@@ -5266,7 +5266,7 @@ calculate_bounds_condition_expression(schema_ptr schema,
 
 // FIXME: right now we just return a list of partition keys - it assumes
 // the table has no partition keys :-)
-static vector<std::string> send_query_to_opensearch(std::string query, int limit) {
+static future<std::vector<std::string>> send_query_to_opensearch(std::string query, int limit) {
 #if 0
     [[nodiscard]] auto vector_store::ann(keyspace_name_t keyspace, index_name_t name, schema_ptr schema, embedding_t embedding, limit_t limit) const
         -> future<std::optional<std::vector<primary_key_t>>> {
@@ -5362,7 +5362,7 @@ future<executor::request_return_type> executor::query(client_state& client_state
     const rjson::value* expression_attribute_values = rjson::find(request, "ExpressionAttributeValues");
 
     if (table_type == table_or_view_type::openSearch) {
-        std::vector<std::string> partition_keys = co_await send_query_to_opensearch(rjson::to_string(key_condition_expression), limit);
+        std::vector<std::string> partition_keys = co_await send_query_to_opensearch(std::string(rjson::to_string_view(*key_condition_expression)), limit);
         co_return api_error::validation(
                 "OpenSearch not yet implemented");
     }
