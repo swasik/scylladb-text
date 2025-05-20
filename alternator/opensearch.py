@@ -31,6 +31,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Run Flask server or send a POST query')
     parser.add_argument('--query', nargs=3, metavar=('INDEX', 'TEXT', 'LIMIT'),
                         help='Send a POST query instead of running the server')
+    parser.add_argument('--port', type=int, default=5000, help='Port to run the server or send the query to')
     args = parser.parse_args()
 
     if args.query:
@@ -41,8 +42,8 @@ if __name__ == '__main__':
             print("Limit must be an integer", file=sys.stderr)
             sys.exit(1)
 
-        url = f"http://localhost:5000/api/v1/text-search/{index}/search"
+        url = f"http://localhost:{args.port}/api/v1/text-search/{index}/search"
         response = requests.post(url, json={"text": text, "limit": limit})
         print(response.status_code, response.json())
     else:
-        app.run(debug=True)
+        app.run(debug=True, port=args.port)
