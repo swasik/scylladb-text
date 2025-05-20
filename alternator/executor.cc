@@ -5362,7 +5362,7 @@ future<executor::request_return_type> executor::query(client_state& client_state
     const rjson::value* expression_attribute_values = rjson::find(request, "ExpressionAttributeValues");
 
     if (table_type == table_or_view_type::openSearch) {
-        co_await send_query_to_opensearch(rjson::to_string(key_condition_expression), limit);
+        std::vector<std::string> partition_keys = co_await send_query_to_opensearch(rjson::to_string(key_condition_expression), limit);
         co_return api_error::validation(
                 "OpenSearch not yet implemented");
     }
