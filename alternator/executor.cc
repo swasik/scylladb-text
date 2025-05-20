@@ -5322,6 +5322,7 @@ static future<std::vector<std::string>> send_query_to_opensearch(std::string que
     vslogger.info("ppery: keys.size: {}", keys.size());
     co_return std::optional{keys};
 #endif
+    co_return std::vector<std::string>();
 }
 
 future<executor::request_return_type> executor::query(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
