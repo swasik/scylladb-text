@@ -5316,6 +5316,13 @@ static future<std::vector<std::string>> send_query_to_opensearch(std::string que
     co_return ret;
 }
 
+partition_key pk_from_string(const std::string& item, schema_ptr schema) {
+    std::vector<bytes> raw_pk;
+    bytes raw_value =  schema->partition_key_columns()[0].type->from_string(item);
+    raw_pk.push_back(std::move(raw_value));
+    return partition_key::from_exploded(raw_pk);
+}
+
 future<executor::request_return_type> executor::query(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     _stats.api_operations.query++;
     elogger.trace("Querying {}", request);
@@ -5355,8 +5362,71 @@ future<executor::request_return_type> executor::query(client_state& client_state
 
     if (table_type == table_or_view_type::openSearch) {
         std::vector<std::string> partition_keys = co_await send_query_to_opensearch(std::string(rjson::to_string_view(*key_condition_expression)), limit);
-        co_return api_error::validation(
-                "OpenSearch not yet implemented");
+        auto atg = ::make_shared<const std::optional<attrs_to_get>>();
+        std::vector<future<std::vector<rjson::value>>> response_futures;
+        for (const auto &k : partition_keys) {
+            auto pk = pk_from_string(k, schema);
+            dht::partition_range_vector partition_ranges{dht::partition_range(dht::decorate_key(*schema, pk))};
+            std::vector<query::clustering_range> bounds;
+            bounds.push_back(query::clustering_range::make_open_ended_both_sides());
+
+            auto regular_columns =
+                    schema->regular_columns() | std::views::transform([] (const column_definition& cdef) { return cdef.id; })
+                    | std::ranges::to<query::column_id_vector>();
+            auto selection = cql3::selection::selection::wildcard(schema);
+            auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
+            auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice),
+                    query::tombstone_limit(_proxy.get_tombstone_limit()));
+            command->allow_limit = db::allow_per_partition_rate_limit::yes;
+            future<std::vector<rjson::value>> f = _proxy.query(schema, std::move(command), std::move(partition_ranges), cl,
+                    service::storage_proxy::coordinator_query_options(executor::default_timeout(), permit, client_state, trace_state)).then(
+                    [schema = schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = atg] (service::storage_proxy::coordinator_query_result qr) mutable {
+                utils::get_local_injector().inject("alternator_batch_get_item", [] { throw std::runtime_error("batch_get_item injection"); });
+                uint64_t response_size = 0;
+                return describe_multi_item(std::move(schema), std::move(partition_slice), std::move(selection), std::move(qr.query_result), std::move(attrs_to_get), response_size);
+            });
+            response_futures.push_back(std::move(f));
+        }
+        bool some_succeeded = false;
+        std::exception_ptr eptr;
+
+        rjson::value response = rjson::empty_object();
+        rjson::add(response, "Responses", rjson::empty_object());
+        rjson::add(response, "UnprocessedKeys", rjson::empty_object());
+
+        rjson::value items = rjson::empty_array();
+        uint results_size = 0;
+        rjson::value items_descr = rjson::empty_object();
+
+        auto fut_it = response_futures.begin();
+        for (const auto& pk : partition_keys) {
+            std::string table = table_name(*schema);
+            auto& fut = *fut_it;
+            ++fut_it;
+            try {
+                std::vector<rjson::value> results = co_await std::move(fut);
+                some_succeeded = true;
+                for (rjson::value& json : results) {
+                    results_size++;
+                    rjson::push_back(items, std::move(json));
+                }
+            } catch(...) {
+                eptr = std::current_exception();
+            }
+        }
+        rjson::add(items_descr, "Count", results_size);
+        rjson::add(items_descr, "ScannedCount", results_size);
+        rjson::add(items_descr, "Items", std::move(items));
+
+        if (!some_succeeded && eptr) {
+            co_await coroutine::return_exception_ptr(std::move(eptr));
+        }
+        if (is_big(response)) {
+            co_return make_streamed(std::move(items_descr));
+        } else {
+            co_return make_jsonable(std::move(items_descr));
+        }
+        ///Amnon
     }
 
     // exactly one of key_conditions or key_condition_expression
