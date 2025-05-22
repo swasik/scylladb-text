@@ -60,6 +60,11 @@
 #include "alternator/extract_from_attrs.hh"
 #include "types/types.hh"
 #include "db/system_keyspace.hh"
+#include <seastar/http/client.hh>
+#include <seastar/http/request.hh>
+#include <seastar/http/reply.hh>
+#include <seastar/util/short_streams.hh>
+#include <seastar/http/connection_factory.hh>
 
 using namespace std::chrono_literals;
 
@@ -5265,26 +5270,25 @@ calculate_bounds_condition_expression(schema_ptr schema,
 }
 
 // FIXME: right now we just return a list of partition keys - it assumes
-// the table has no partition keys :-)
+// the table has no clustering keys :-)
 static future<std::vector<std::string>> send_query_to_opensearch(std::string query, int limit) {
-#if 0
-    [[nodiscard]] auto vector_store::ann(keyspace_name_t keyspace, index_name_t name, schema_ptr schema, embedding_t embedding, limit_t limit) const
-        -> future<std::optional<std::vector<primary_key_t>>> {
-    auto req = http::request::make("POST", _host, format("/api/v1/indexes/{}/{}/ann", keyspace, name));
-    req.write_body("json", [limit, embedding = std::move(embedding)](output_stream<char> out) -> future<> {
+    elogger.warn("NYH send_query_to_opensearch {} {}", query, limit);
+    std::string_view indexname = "OpenSearch";
+    std::string_view index_host = "127.0.0.1";
+    if (limit < 0) {
+        limit = 100; // FIXME
+    }
+    int index_port = 6080;
+    auto addr = net::inet_address(index_host.data());
+    auto client = std::make_unique<seastar::http::experimental::client>(socket_address(addr, index_port));
+    auto req = http::request::make("POST", fmt::format("{}:{}", index_host, index_port), fmt::format("/api/v1/text-search/{}/search", indexname));
+    req.write_body("json", [limit, query = std::move(query)](output_stream<char> out) -> future<> {
         std::exception_ptr ex;
         try {
-            co_await out.write(R"({"embedding":[)");
-            auto first = true;
-            for (auto value : embedding) {
-                if (!first) {
-                    co_await out.write(",");
-                } else {
-                    first = false;
-                }
-                co_await out.write(format("{}", value));
-            }
-            co_await out.write(format(R"(],"limit":{}}})", limit));
+            co_await out.write("{\"text\": ");
+            co_await out.write(rjson::quote_json_string(query));
+            co_await out.write(format(", \"limit\":{}", limit));
+            co_await out.write("}");
             co_await out.flush();
         } catch (...) {
             ex = std::current_exception();
@@ -5296,33 +5300,20 @@ static future<std::vector<std::string>> send_query_to_opensearch(std::string que
     });
 
     auto resp_status = make_lw_shared(http::reply::status_type::ok);
-    auto resp_content = make_lw_shared<std::vector<temporary_buffer<char>>>();
-    co_await _client->make_request(std::move(req), [resp_status, resp_content](http::reply const& reply, input_stream<char> body) -> future<> {
+    auto resp_content = make_lw_shared<sstring>();
+    co_await client->make_request(std::move(req), [resp_status, resp_content](http::reply const& reply, input_stream<char> body) -> future<> {
         *resp_status = reply._status;
-        *resp_content = co_await util::read_entire_stream(body);
+        *resp_content = co_await util::read_entire_stream_contiguous(body);
+        elogger.warn("NYH setting resp {} {}", *resp_status, *resp_content);
     });
 
-    vslogger.info("ppery: make_request: status {}, content {}", resp_status, resp_content);
+    elogger.warn("NYH resp {} {}", *resp_status, *resp_content);
     auto const resp = rjson::parse(std::move(*resp_content));
-    vslogger.info("ppery: resp: {}", resp);
-    auto const& primary_keys = resp["primary_keys"];
-    vslogger.info("ppery: primary_keys: {}", primary_keys);
-    // TODO: fix error checking
-    auto const distances = resp["distances"].GetArray();
-    vslogger.info("ppery: distances: {}", distances);
-    auto size = distances.Size();
-    vslogger.info("ppery: size: {}", size);
-    auto keys = std::vector<primary_key_t>{};
-    for (auto idx = 0U; idx < size; ++idx) {
-        vslogger.info("ppery: loop: {}", idx);
-        auto pk = pk_from_json(primary_keys, idx, schema);
-        auto ck = ck_from_json(primary_keys, idx, schema);
-        keys.push_back(primary_key_t{dht::decorate_key(*schema, std::move(pk)), ck});
+    std::vector<std::string> ret;
+    for (const rjson::value& partition_key : resp.GetArray()) {
+        ret.push_back(std::string(rjson::to_string_view(partition_key)));
     }
-    vslogger.info("ppery: keys.size: {}", keys.size());
-    co_return std::optional{keys};
-#endif
-    co_return std::vector<std::string>();
+    co_return ret;
 }
 
 future<executor::request_return_type> executor::query(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {

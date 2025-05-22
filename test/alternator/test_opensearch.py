@@ -14,44 +14,46 @@ def test_simple_get_item(test_table_s):
     p = random_string()
     val = random_string()
     c = random_string()
-    query = {
-      "query": {
-        "intervals": {
-          "title": {
-            "all_of": {
-              "ordered": True,
-              "intervals": [
-                {
-                  "match": {
-                    "query": "key-value pairs",
-                    "max_gaps": 0,
-                    "ordered": True
-                  }
-                },
-                {
-                  "any_of": {
-                    "intervals": [
-                      {
-                        "match": {
-                          "query": "hash table"
-                        }
-                      },
-                      {
-                        "match": {
-                          "query": "hash map"
-                        }
-                      }
-                    ]
-                  }
-                }
-              ]
-            }
-          }
-        }
-      }
-    }
+    #query = {
+    #  "query": {
+    #    "intervals": {
+    #      "title": {
+    #        "all_of": {
+    #          "ordered": True,
+    #          "intervals": [
+    #            {
+    #              "match": {
+    #                "query": "key-value pairs",
+    #                "max_gaps": 0,
+    #                "ordered": True
+    #              }
+    #            },
+    #            {
+    #              "any_of": {
+    #                "intervals": [
+    #                  {
+    #                    "match": {
+    #                      "query": "hash table"
+    #                    }
+    #                  },
+    #                  {
+    #                    "match": {
+    #                      "query": "hash map"
+    #                    }
+    #                  }
+    #                ]
+    #              }
+    #            }
+    #          ]
+    #        }
+    #      }
+    #    }
+    #  }
+    #}
+    #query=json.dumps(query)
+    query="dog cat"
     test_table_s.put_item(Item={'p': p, 'c': c, 'att': val})
-    res = test_table_s.query(KeyConditionExpression=json.dumps(query),
+    res = test_table_s.query(KeyConditionExpression=query,
                              IndexName="OpenSearch"
        )
     print(res)
