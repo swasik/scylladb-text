@@ -5361,6 +5361,18 @@ future<executor::request_return_type> executor::query(client_state& client_state
     const rjson::value* expression_attribute_values = rjson::find(request, "ExpressionAttributeValues");
 
     if (table_type == table_or_view_type::openSearch) {
+        if (!key_condition_expression) {
+            throw api_error::validation("OpenSearch query must specify a KeyConditionExpression");
+        }
+        if (expression_attribute_names || expression_attribute_values) {
+            throw api_error::validation("In an OpenSearch query, KeyConditionExpression syntax is an OpenSearch syntax, and doesn't use ExpressionAttributeNames or ExpressionAttributeValues, so those must not be specified");
+        }
+        if (exclusive_start_key) {
+            throw api_error::validation("Paging not yet implemented in OpenSearch query, so ExclusiveKeyStart must not be passed.");
+        }
+        if (!forward) {
+            throw api_error::validation("Reverse-order query (ScanIndexForward=false) not yet implemented for OpenSearch.");
+        }
         std::vector<std::string> partition_keys = co_await send_query_to_opensearch(std::string(rjson::to_string_view(*key_condition_expression)), limit);
         auto atg = ::make_shared<const std::optional<attrs_to_get>>();
         std::vector<future<std::vector<rjson::value>>> response_futures;
