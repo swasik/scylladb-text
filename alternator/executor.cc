@@ -5306,6 +5306,9 @@ static future<std::vector<std::string>> send_query_to_opensearch(std::string que
         *resp_content = co_await util::read_entire_stream_contiguous(body);
         elogger.warn("NYH setting resp {} {}", *resp_status, *resp_content);
     });
+    if (*resp_status != http::reply::status_type::ok) {
+        throw api_error::validation(fmt::format("Failed request to OpenIndex index with name '{}'", indexname));
+    }
 
     elogger.warn("NYH resp {} {}", *resp_status, *resp_content);
     auto const resp = rjson::parse(std::move(*resp_content));
