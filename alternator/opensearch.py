@@ -29,21 +29,20 @@ def text_search(index):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Run Flask server or send a POST query')
-    parser.add_argument('--query', nargs=3, metavar=('INDEX', 'TEXT', 'LIMIT'),
-                        help='Send a POST query instead of running the server')
+    parser.add_argument('--query', help='Send a POST query instead of running the server')
     parser.add_argument('--port', type=int, default=6080, help='Port to run the server or send the query to')
+    parser.add_argument('--limit', type=int, default=1, help='Limit the number of results when using query')
+    parser.add_argument('--index', default="OpenSearch", help='Index to search when using the query')
+    parser.add_argument('--host', default="localhost", help='host to connect to')
     args = parser.parse_args()
 
     if args.query:
-        index, text, limit = args.query
-        try:
-            limit = int(limit)
-        except ValueError:
-            print("Limit must be an integer", file=sys.stderr)
-            sys.exit(1)
+        text = args.query
 
-        url = f"http://localhost:{args.port}/api/v1/text-search/{index}/search"
-        response = requests.post(url, json={"text": text, "limit": limit})
+        url = f"http://{args.host}:{args.port}/api/v1/text-search/{args.index}/search"
+        print(url)
+        response = requests.post(url, json={"text": text, "limit": args.limit})
+        print(response)
         print(response.status_code, response.json())
     else:
         app.run(debug=True, port=args.port)
