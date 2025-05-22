@@ -13,6 +13,7 @@ import json
 def test_simple_get_item(test_table_s):
     p = random_string()
     val = random_string()
+<<<<<<< HEAD
     c = random_string()
     #query = {
     #  "query": {
