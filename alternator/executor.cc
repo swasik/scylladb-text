@@ -357,7 +357,7 @@ get_table_or_view(service::storage_proxy& proxy, const rjson::value& request) {
             throw api_error::validation(
                                 fmt::format("Non-string IndexName '{}'", rjson::to_string_view(*index_name)));
         }
-        if (rjson::to_string_view(*index_name) == "OpenSearch") {
+        if (rjson::to_string_view(*index_name) == "opensearch") {
             type = table_or_view_type::openSearch;
         } else {
             orig_table_name = std::move(table_name);
@@ -5273,7 +5273,7 @@ calculate_bounds_condition_expression(schema_ptr schema,
 // the table has no clustering keys :-)
 static future<std::vector<std::string>> send_query_to_opensearch(std::string query, int limit) {
     elogger.warn("NYH send_query_to_opensearch {} {}", query, limit);
-    std::string_view indexname = "OpenSearch";
+    std::string_view indexname = "opensearch";
     std::string_view index_host = "127.0.0.1";
     if (limit < 0) {
         limit = 100; // FIXME
