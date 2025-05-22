@@ -13,7 +13,6 @@ import json
 def test_simple_get_item(test_table_s):
     p = random_string()
     val = random_string()
-<<<<<<< HEAD
     c = random_string()
     #query = {
     #  "query": {
@@ -53,9 +52,11 @@ def test_simple_get_item(test_table_s):
     #}
     #query=json.dumps(query)
     query="dog cat"
-    test_table_s.put_item(Item={'p': p, 'c': c, 'att': val})
+    limit = 2
+    for i in range(limit):
+        test_table_s.put_item(Item={'p': f"amnon_{i}", 'c': c, 'att': val})
     res = test_table_s.query(KeyConditionExpression=query,
-                             IndexName="OpenSearch"
+                             IndexName="OpenSearch", Limit=limit
        )
     print(res)
     assert len(res['Items']) > 0
