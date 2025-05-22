@@ -51,12 +51,10 @@ def test_simple_get_item(test_table_s):
     #  }
     #}
     #query=json.dumps(query)
-    query="dog cat"
-    limit = 2
-    for i in range(limit):
-        test_table_s.put_item(Item={'p': f"amnon_{i}", 'c': c, 'att': val})
+    query="amnon"
+    test_table_s.put_item(Item={'p': f"amnon", 'c': "This is amnon document", 'att': val})
     res = test_table_s.query(KeyConditionExpression=query,
-                             IndexName="OpenSearch", Limit=limit
+                             IndexName="OpenSearch", Limit=1
        )
     print(res)
     assert len(res['Items']) > 0
